@@ -12,6 +12,11 @@
 <body>
 <div id="root"></div>
 <script type="text/babel">
+// ==========================================
+// ВСТАВЬ URL GOOGLE APPS SCRIPT МЕЖДУ КАВЫЧЕК:
+var SHEET_URL = 'https://script.google.com/a/macros/wmtgroup.ru/s/AKfycbw0HC0cJ4XC5_kM7MD2lJtrFo1NyIQ5P0UrgTsdsbGvWM6ianSFYXdGK_SwdYvyiPJM/exec';
+// ==========================================
+
 const{useState,useEffect,useRef}=React;
 
 const mkG=n=>Array.from({length:n},()=>Array(n).fill(0));
@@ -45,8 +50,28 @@ const lvInfo={
   1:{name:"Конкретные операции",desc:"Работа с отдельными элементами по одному. Применение простых правил к малому количеству объектов.",work:"Исполнение чётко определённых задач, работа по инструкции."},
   2:{name:"Упорядоченные системы",desc:"Удержание правил при средней нагрузке. Отслеживание нелинейных трансформаций и нескольких элементов одновременно.",work:"Координация процессов, аналитика, работа с регламентами."},
   3:{name:"Системное мышление",desc:"Применение сложных правил в большом пространстве. Отслеживание переноса через границы, удержание правила при высокой плотности.",work:"Управление проектами, оптимизация процессов, архитектура решений."},
-  4:{name:"Динамические системы",desc:"Одновременное удержание нескольких правил. Определение контекста (позиция элемента) для выбора правила. Параллельная обработка.",work:"Стратегическое управление, архитектура систем, трансформация организаций."},
+  4:{name:"Динамические системы",desc:"Одновременное удержание нескольких правил. Определение контекста для выбора правила. Параллельная обработка.",work:"Стратегическое управление, архитектура систем, трансформация организаций."},
 };
+
+function computeScores(results){
+  var peaks=blocks.map(function(_,i){var br=results.filter(function(r){return r.bi===i&&r.correct});return br.length?Math.max.apply(null,br.map(function(r){return r.density})):0});
+  var avgPeak=peaks.reduce(function(s,p){return s+p},0)/peaks.length;
+  var lvl=1;if(avgPeak>=8)lvl=4;else if(avgPeak>=5)lvl=3;else if(avgPeak>=3)lvl=2;
+  var maxPeak=Math.max.apply(null,peaks);
+  var pot=lvl;if(maxPeak>=avgPeak+2&&lvl<4)pot=Math.min(lvl+1,4);
+  var tot=results.filter(function(r){return r.correct}).length;
+  var acc=tot/results.length;
+  var logScore=acc>=0.8?4:acc>=0.6?3:acc>=0.4?2:1;
+  var firstQs=blocks.map(function(_,i){return results.find(function(r){return r.bi===i})});
+  var firstOk=firstQs.filter(function(r){return r&&r.correct}).length;
+  var impr=0,fails=0;
+  blocks.forEach(function(_,i){var br=results.filter(function(r){return r.bi===i});if(br.length>=2&&!br[0].correct){fails++;if(br.slice(1).some(function(r){return r.correct}))impr++;}});
+  var learnPct=(firstOk/blocks.length+(fails>0?impr/fails:1))/2;
+  var learnScore=learnPct>=0.8?4:learnPct>=0.6?3:learnPct>=0.4?2:1;
+  var avgTpD=results.reduce(function(s,r){return s+r.time/Math.max(r.density,1)},0)/results.length;
+  var spdScore=avgTpD<=3?4:avgTpD<=5?3:avgTpD<=8?2:1;
+  return{lvl:lvl,pot:pot,tot:tot,logScore:logScore,learnScore:learnScore,spdScore:spdScore,avgPeak:Math.round(avgPeak*10)/10};
+}
 
 function Grid({data,interactive,userGrid,onToggle,showResult,answer,sz,cellSize}){
   const cs=cellSize||(sz<=5?38:sz<=6?34:30);
@@ -88,9 +113,32 @@ function CognitiveTest(){
   const[mks,setMks]=useState(0);
   const[umks,setUmks]=useState(0);
   const[fc,setFc]=useState(null);
+  const[sent,setSent]=useState(false);
   const tmr=useRef(null);
 
   useEffect(function(){if(phase==='test'&&t0){tmr.current=setInterval(function(){setElapsed(Math.floor((Date.now()-t0)/1000))},1000);return function(){clearInterval(tmr.current)};}},[phase,t0]);
+
+  // Auto-save to Google Sheets
+  useEffect(function(){
+    if(phase==='result'&&results.length>0&&!sent){
+      setSent(true);
+      try{
+        var sc=computeScores(results);
+        if(SHEET_URL){
+          fetch(SHEET_URL,{
+            method:'POST',
+            mode:'no-cors',
+            body:JSON.stringify({
+              name:name,elapsed:elapsed,correct:sc.tot,total:results.length,
+              level:sc.lvl,potential:sc.pot,logScore:sc.logScore,
+              learnScore:sc.learnScore,speedScore:sc.spdScore,avgPeak:sc.avgPeak,
+              questions:results
+            })
+          }).catch(function(){});
+        }
+      }catch(e){}
+    }
+  },[phase,sent]);
 
   const genQ=function(bIdx,d){const b=blocks[bIdx];const qi=randGrid(d,b.sz);return{qi:qi,answer:b.tf(qi),density:d}};
 
@@ -100,7 +148,7 @@ function CognitiveTest(){
     const d=blocks[0].startD;const q=genQ(0,d);
     setPhase('test');setT0(Date.now());setQS(Date.now());setBi(0);setQib(0);setTQ(0);
     setDensity(d);setQuest(q);setResults([]);setUg(mkG(blocks[0].sz));
-    setChecked(false);setMks(0);setUmks(0);setFc(null);
+    setChecked(false);setMks(0);setUmks(0);setFc(null);setSent(false);
   };
 
   const tog=function(r,c){
@@ -148,48 +196,32 @@ function CognitiveTest(){
   );
 
   if(phase==='result'){
-    const peaks=blocks.map(function(_,i){const br=results.filter(function(r){return r.bi===i&&r.correct});return br.length?Math.max.apply(null,br.map(function(r){return r.density})):0});
-    const avgPeak=peaks.reduce(function(s,p){return s+p},0)/peaks.length;
-    var lvl=1;if(avgPeak>=8)lvl=4;else if(avgPeak>=5)lvl=3;else if(avgPeak>=3)lvl=2;
-    const maxPeak=Math.max.apply(null,peaks);
-    var pot=lvl;if(maxPeak>=avgPeak+2&&lvl<4)pot=Math.min(lvl+1,4);
-    const tot=results.filter(function(r){return r.correct}).length;
-    const acc=tot/results.length;
-    const logScore=acc>=0.8?4:acc>=0.6?3:acc>=0.4?2:1;
-    const firstQs=blocks.map(function(_,i){return results.find(function(r){return r.bi===i})});
-    const firstOk=firstQs.filter(function(r){return r&&r.correct}).length;
-    var impr=0,fails=0;
-    blocks.forEach(function(_,i){const br=results.filter(function(r){return r.bi===i});if(br.length>=2&&!br[0].correct){fails++;if(br.slice(1).some(function(r){return r.correct}))impr++;}});
-    const learnPct=(firstOk/blocks.length+(fails>0?impr/fails:1))/2;
-    const learnScore=learnPct>=0.8?4:learnPct>=0.6?3:learnPct>=0.4?2:1;
-    const avgTpD=results.reduce(function(s,r){return s+r.time/Math.max(r.density,1)},0)/results.length;
-    const spdScore=avgTpD<=3?4:avgTpD<=5?3:avgTpD<=8?2:1;
-
+    var sc=computeScores(results);
     return(
       <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'linear-gradient(135deg,#0f172a,#1e293b)',fontFamily:F}}>
         <div style={{maxWidth:560,padding:36,background:'#fff',borderRadius:8,boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
           <div style={{fontSize:11,color:'#999',marginBottom:4,letterSpacing:1}}>ADAPTIVE REASONING ASSESSMENT</div>
           <h1 style={{fontSize:22,color:'#0f172a',margin:'0 0 2px',fontWeight:700}}>{'Отчёт: '+name}</h1>
           <p style={{color:'#666',margin:'0 0 24px',fontSize:13}}>
-            {new Date().toLocaleDateString('ru-RU')+' · Время: '+fmt(elapsed)+' · Правильных: '+tot+'/'+results.length}
+            {new Date().toLocaleDateString('ru-RU')+' · Время: '+fmt(elapsed)+' · Правильных: '+sc.tot+'/'+results.length}
           </p>
           <div style={{fontSize:14,fontWeight:700,color:'#0f172a',marginBottom:12,borderBottom:'2px solid #eee',paddingBottom:6}}>1. Когнитивная сложность</div>
           <p style={{color:'#666',fontSize:13,lineHeight:1.6,margin:'0 0 16px'}}>Когнитивная сложность — масштаб информации, с которым вы эффективно работаете.</p>
           <div style={{padding:18,background:'#f0f7ff',borderRadius:6,border:'1px solid #b3d4fc',marginBottom:12}}>
             <div style={{fontSize:11,color:'#1a5fb4',fontWeight:600,marginBottom:6}}>ТЕКУЩИЙ УРОВЕНЬ</div>
-            <div style={{fontSize:20,fontWeight:700,color:'#0f172a',marginBottom:4}}>{lvInfo[lvl].name}</div>
-            <div style={{fontSize:13,color:'#333',lineHeight:1.6,marginBottom:6}}>{lvInfo[lvl].desc}</div>
-            <div style={{fontSize:12,color:'#666',fontStyle:'italic'}}>{lvInfo[lvl].work}</div>
+            <div style={{fontSize:20,fontWeight:700,color:'#0f172a',marginBottom:4}}>{lvInfo[sc.lvl].name}</div>
+            <div style={{fontSize:13,color:'#333',lineHeight:1.6,marginBottom:6}}>{lvInfo[sc.lvl].desc}</div>
+            <div style={{fontSize:12,color:'#666',fontStyle:'italic'}}>{lvInfo[sc.lvl].work}</div>
           </div>
-          {pot>lvl&&(<div style={{padding:18,background:'#fef9e7',borderRadius:6,border:'1px solid #e6d560',marginBottom:12}}>
+          {sc.pot>sc.lvl&&(<div style={{padding:18,background:'#fef9e7',borderRadius:6,border:'1px solid #e6d560',marginBottom:12}}>
             <div style={{fontSize:11,color:'#8a6d0b',fontWeight:600,marginBottom:6}}>ПОТЕНЦИАЛ</div>
-            <div style={{fontSize:18,fontWeight:600,color:'#0f172a',marginBottom:4}}>{lvInfo[pot].name}</div>
-            <div style={{fontSize:13,color:'#333',lineHeight:1.6}}>{lvInfo[pot].desc}</div>
+            <div style={{fontSize:18,fontWeight:600,color:'#0f172a',marginBottom:4}}>{lvInfo[sc.pot].name}</div>
+            <div style={{fontSize:13,color:'#333',lineHeight:1.6}}>{lvInfo[sc.pot].desc}</div>
           </div>)}
           <div style={{fontSize:14,fontWeight:700,color:'#0f172a',marginBottom:12,marginTop:24,borderBottom:'2px solid #eee',paddingBottom:6}}>2. Навыки когнитивной обработки</div>
-          {[{label:'Логико-аналитический',score:logScore,desc:'Точность вычленения, переноса и применения правил'},
-            {label:'Обучаемость',score:learnScore,desc:'Гибкость, скорость усвоения новых правил'},
-            {label:'Скорость',score:spdScore,desc:'Темп решения незнакомых задач'}
+          {[{label:'Логико-аналитический',score:sc.logScore,desc:'Точность вычленения, переноса и применения правил'},
+            {label:'Обучаемость',score:sc.learnScore,desc:'Гибкость, скорость усвоения новых правил'},
+            {label:'Скорость',score:sc.spdScore,desc:'Темп решения незнакомых задач'}
           ].map(function(s){return(<div key={s.label} style={{marginBottom:16}}>
             <div style={{fontSize:13,fontWeight:600,color:'#0f172a',marginBottom:2}}>{s.label}</div>
             <div style={{fontSize:11,color:'#888',marginBottom:6}}>{s.desc}</div>
